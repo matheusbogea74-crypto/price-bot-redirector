@@ -1,0 +1,17 @@
+{
+  "name": "price-bot-redirector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Redirecionador de links de afiliado (/p/:id) pro price-bot",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "dotenv": "^16.4.5"
+  }
+}
