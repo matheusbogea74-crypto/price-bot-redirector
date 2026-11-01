@@ -54,8 +54,16 @@ function hasViewKey(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// Páginas do Zoom/Buscapé que o usuário salvou no navegador e enviou pelo
+// painel. Ficam na fila até o bot buscar (GET /iphones/imports), importar e
+// devolver o resultado. Só em memória: se a instância reiniciar antes do bot
+// buscar, o usuário reenvia.
+const iphoneImports = [];
+const MAX_IMPORTS_KEPT = 20;
+
 const app = express();
-app.use(express.json({ limit: '2mb' }));
+// 10mb: uma página salva do Zoom tem ~800kb.
+app.use(express.json({ limit: '10mb' }));
 
 app.get('/', (req, res) => {
   res.json({ ok: true, totalRedirects: Object.keys(redirects).length });
@@ -110,7 +118,61 @@ app.get('/iphones/data.json', (req, res) => {
     return;
   }
   const { viewKey: _viewKey, ...publicData } = iphoneSnapshot;
-  res.json(publicData);
+  const imports = iphoneImports.map(({ html: _html, ...rest }) => rest);
+  res.json({ ...publicData, imports });
+});
+
+app.post('/iphones/upload', (req, res) => {
+  if (!iphoneSnapshot || !hasViewKey(req)) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+
+  const { filename, html, savedAt } = req.body ?? {};
+  if (typeof html !== 'string' || !html.includes('__NEXT_DATA__')) {
+    res.status(400).json({ error: 'Esse arquivo não parece uma página de busca salva do Zoom ou do Buscapé.' });
+    return;
+  }
+
+  // Quando a página foi salva no navegador (lastModified do arquivo); nunca no futuro.
+  const now = Date.now();
+  const savedAtMs = Number.isFinite(savedAt) && savedAt > 0 ? Math.min(savedAt, now) : now;
+
+  const upload = {
+    id: crypto.randomUUID(),
+    filename: String(filename ?? 'pagina.html').slice(0, 200),
+    uploadedAt: new Date(now).toISOString(),
+    savedAt: new Date(savedAtMs).toISOString(),
+    status: 'pending',
+    html,
+  };
+  iphoneImports.unshift(upload);
+  iphoneImports.splice(MAX_IMPORTS_KEPT);
+  res.json({ ok: true, id: upload.id });
+});
+
+app.get('/iphones/imports', (req, res) => {
+  if (req.headers.authorization !== `Bearer ${SYNC_SECRET}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  res.json(iphoneImports.filter((u) => u.status === 'pending'));
+});
+
+app.post('/iphones/imports/:id/result', (req, res) => {
+  if (req.headers.authorization !== `Bearer ${SYNC_SECRET}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  const upload = iphoneImports.find((u) => u.id === req.params.id);
+  if (!upload) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  upload.status = req.body?.ok ? 'done' : 'error';
+  upload.result = req.body ?? null;
+  upload.html = null;
+  res.json({ ok: true });
 });
 
 app.post('/iphones/sync', (req, res) => {

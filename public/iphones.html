@@ -126,6 +126,11 @@
       .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 4px 10px; }
       .bar { height: 6px; background: var(--accent); border-radius: 3px; opacity: 0.7; }
       .empty { padding: 22px; text-align: center; color: var(--muted); background: var(--surface); border: 1px dashed var(--border); border-radius: 12px; }
+      .offer { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+      .upload { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .upload input { max-width: 100%; font: inherit; font-size: 14px; }
+      .import-row { font-size: 13px; padding: 6px 0; border-top: 1px solid var(--border); }
+      code { font-size: 12px; background: var(--surface-2); padding: 1px 4px; border-radius: 4px; }
       footer { margin-top: 32px; font-size: 13px; color: var(--muted); }
       footer li { margin-bottom: 4px; }
       .theme { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; padding: 5px 10px; font: inherit; font-size: 13px; cursor: pointer; }
@@ -147,6 +152,21 @@
       <h2>Alertas recentes</h2>
       <div id="alerts"></div>
 
+      <h2>Mais lojas pelo Zoom / Buscapé</h2>
+      <div class="card">
+        <div class="small">
+          No <b>computador</b>, abra o <a href="https://www.zoom.com.br/search?q=iphone" target="_blank" rel="noopener noreferrer">Zoom</a>
+          ou o <a href="https://www.buscape.com.br/search?q=iphone" target="_blank" rel="noopener noreferrer">Buscapé</a>, pesquise
+          (ex.: <i>iphone</i>, <i>iphone 17</i>), aperte <b>Ctrl+S</b> e envie o arquivo <code>.html</code> aqui. O bot lê a página em
+          até 2 minutos e só aproveita produtos cuja melhor oferta é de loja confiável (Magalu, KaBuM!, Fast Shop, Amazon…).
+        </div>
+        <div class="upload">
+          <input type="file" id="upload" accept=".html,.htm,text/html" />
+          <span class="small muted" id="upload-status"></span>
+        </div>
+        <div id="imports"></div>
+      </div>
+
       <div class="tabs" role="tablist">
         <button role="tab" aria-selected="true" data-tab="novo">Novo</button>
         <button role="tab" aria-selected="false" data-tab="usado">Seminovo e vitrine</button>
@@ -154,7 +174,7 @@
       <div class="muted small">Menor preço atual de cada modelo, do mais barato pro mais caro. Só vendedores confiáveis.</div>
       <div class="grid" id="groups"></div>
 
-      <h2>Última checagem</h2>
+      <h2>Última checagem automática (Amazon)</h2>
       <div id="lastrun"></div>
 
       <footer>
@@ -170,7 +190,11 @@
 
     <script>
       const key = new URLSearchParams(location.search).get('k');
-      const STORE_NAMES = { amazon: 'Amazon', mercadolivre: 'Mercado Livre' };
+      const STORE_NAMES = { amazon: 'Amazon', mercadolivre: 'Mercado Livre', zoom: 'Zoom', buscape: 'Buscapé' };
+      const VIA_AGGREGATOR = new Set(['zoom', 'buscape']);
+      // "Magazine Luiza (via Zoom)" pra ofertas importadas; "Amazon" pra checagem direta.
+      const sourceLabel = (store, seller) =>
+        VIA_AGGREGATOR.has(store) ? `${seller ?? '?'} (via ${STORE_NAMES[store]})` : STORE_NAMES[store] ?? store;
       let data = null;
       let tab = 'novo';
 
@@ -204,7 +228,7 @@
         const c = g.current;
         const rows = [];
         if (c.installments && c.installmentValue) rows.push(['Parcelado', `${c.installments}x de ${brl(c.installmentValue)}`]);
-        rows.push(['Menor registrado', `${brl(g.lowest.price)} <span class="muted">(${dateTime(g.lowest.checkedAt)})</span>`]);
+        rows.push(['Menor registrado', `${brl(g.lowest.price)} <span class="muted">(${dateTime(g.lowest.checkedAt)}${g.lowest.store ? `, ${esc(sourceLabel(g.lowest.store, g.lowest.seller))}` : ''})</span>`]);
         if (g.baseline) {
           const cls = g.realDiscountPct > 0 ? 'down' : 'up';
           rows.push([`Base 90 dias${g.usedFloor ? ' (piso)' : ''}`, brl(g.baseline)]);
@@ -222,18 +246,25 @@
             rows.push(['vs. novo', diff > 0 ? `economia ${brl(diff)} (${pct((diff / g.newPrice) * 100)})` : `novo ${brl(-diff)} mais barato`]);
           }
         }
-        rows.push(['Vendedor', esc(c.seller ?? '—')]);
+        const offers = (g.offers ?? []).length > 1
+          ? `<div class="small"><div class="muted" style="margin-bottom:2px">Por fonte (último registro):</div>${g.offers
+              .map((o) => `<div class="offer num"><a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">${esc(sourceLabel(o.store, o.seller))}</a><span>${brl(o.price)} <span class="muted">· ${ago(o.checkedAt)}</span></span></div>`)
+              .join('')}</div>`
+          : '';
+        const viaAggregator = VIA_AGGREGATOR.has(c.store);
         return `<article class="card">
           <div class="card-top">
             <div class="title">${esc(g.label)}${c.grade ? ` <span class="muted">(${esc(c.grade)})</span>` : ''}</div>
             <span class="badge ${g.classification}">${g.classification}</span>
           </div>
           <div class="price num">${brl(c.price)}</div>
+          <div class="small"><b>${esc(sourceLabel(c.store, c.seller))}</b></div>
           <dl class="rows num">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+          ${offers}
           ${spark(g.daily)}
           <div class="actions">
-            <span class="muted small">${esc(STORE_NAMES[c.store] ?? c.store)} · ${ago(c.checkedAt)}</span>
-            <a class="btn" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">Abrir anúncio</a>
+            <span class="muted small">${ago(c.checkedAt)}</span>
+            <a class="btn" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${viaAggregator ? `Ver lojas no ${STORE_NAMES[c.store]}` : 'Abrir anúncio'}</a>
           </div>
         </article>`;
       }
@@ -271,6 +302,24 @@
               <div class="small" style="margin-top:6px"><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">Abrir anúncio</a></div>
             </div>`).join('')
           : '<div class="empty">Nenhum alerta ainda. Eles aparecem aqui quando um modelo bate o menor preço registrado ou fica abaixo do alvo.</div>';
+
+        const importLine = (u) => {
+          const r = u.result;
+          const status =
+            u.status === 'pending'
+              ? '<span class="muted">aguardando o bot (até 2 min)…</span>'
+              : u.status === 'error'
+                ? `<span class="up">não importada: ${esc(r?.error ?? 'erro')}</span>`
+                : `${r.accepted} iPhone(s) aproveitado(s), ${r.discarded} descartado(s)${r.duplicates ? `, ${r.duplicates} repetido(s)` : ''}${r.alerts ? ` · <b>${r.alerts} alerta(s)</b>` : ''}`;
+          return `<div class="import-row"><b>${esc(u.filename)}</b> <span class="muted">· ${dateTime(u.uploadedAt)}</span><br>${status}</div>`;
+        };
+        const li = d.lastImport;
+        document.getElementById('imports').innerHTML = d.imports?.length
+          ? d.imports.slice(0, 5).map(importLine).join('')
+          : li
+            ? `<div class="import-row muted">Última importação: ${dateTime(li.ranAt)} (busca "${esc(li.query ?? '?')}") · ${li.accepted} aproveitado(s), ${li.discarded} descartado(s)</div>`
+            : '<div class="import-row muted">Nenhuma página enviada ainda.</div>';
+        pollWhilePending(d.imports ?? []);
 
         const list = d.groups
           .filter((g) => (tab === 'novo' ? g.condition === 'novo' : g.condition !== 'novo'))
@@ -313,6 +362,38 @@
           setTimeout(load, 60000);
         }
       }
+
+      let pollTimer = null;
+      function pollWhilePending(imports) {
+        clearTimeout(pollTimer);
+        if (imports.some((u) => u.status === 'pending')) pollTimer = setTimeout(load, 20000);
+      }
+
+      document.getElementById('upload').addEventListener('change', async (event) => {
+        const file = event.target.files?.[0];
+        const status = document.getElementById('upload-status');
+        if (!file) return;
+        if (file.size > 9 * 1024 * 1024) {
+          status.textContent = 'Arquivo grande demais (máx. 9 MB). Salve como "somente HTML".';
+          return;
+        }
+        status.textContent = 'Enviando…';
+        try {
+          const html = await file.text();
+          const res = await fetch(`/iphones/upload?k=${encodeURIComponent(key)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: file.name, savedAt: file.lastModified, html }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(body.error ?? `erro ${res.status}`);
+          status.textContent = 'Enviado! O bot importa em até 2 minutos.';
+          event.target.value = '';
+          load();
+        } catch (err) {
+          status.textContent = `Não enviado: ${err.message}`;
+        }
+      });
 
       document.querySelectorAll('.tabs button').forEach((b) =>
         b.addEventListener('click', () => {
